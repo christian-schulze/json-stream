@@ -83,17 +83,22 @@ module JSON
       # end
       def initialize(&block)
         @state = :start_document
-        @utf8 = Buffer.new
+        @utf8_buffer = Buffer.new
         @listeners = Hash.new {|h, k| h[k] = [] }
         @stack, @unicode, @buf, @pos = [], "", "", -1
+        @state_changed = false
         instance_eval(&block) if block_given?
       end
 
-      # Pass data into the parser to advance the state machine and
-      # generate callback events. This is well suited for an EventMachine
-      # receive_data loop.
       def <<(data)
-        (@utf8 << data).each_char do |ch|
+        @utf8_buffer << data
+      end
+
+      # Process data in the buffer until the next change in state
+      def read
+        @state_changed = false
+        until @utf8_buffer.empty? || @state_changed
+          ch = @utf8_buffer.next_character
           @pos += 1
           case @state
           when :start_document
@@ -103,11 +108,13 @@ module JSON
               @stack.push(:object)
               notify_start_document
               notify_start_object
+              @state_changed = true
             when LEFT_BRACKET
               @state = :start_array
               @stack.push(:array)
               notify_start_document
               notify_start_array
+              @state_changed = true
             when WS
               # ignore
             else
@@ -131,9 +138,11 @@ module JSON
               if @stack.pop == :string
                 @state = :end_value
                 notify_value(@buf)
+                @state_changed = true
               else # :key
                 @state = :end_key
                 notify_key(@buf)
+                @state_changed = true
               end
               @buf = ""
             when BACKSLASH
@@ -228,6 +237,7 @@ module JSON
             else
               @state = :end_value
               notify_value(@buf.to_i)
+              @state_changed = true
               @buf = ""
               @pos -= 1
               redo
@@ -250,6 +260,7 @@ module JSON
             else
               @state = :end_value
               notify_value(@buf.to_f)
+              @state_changed = true
               @buf = ""
               @pos -= 1
               redo
@@ -271,6 +282,7 @@ module JSON
               @state = :end_value
               num = @buf.include?('.') ? @buf.to_f : @buf.to_i
               notify_value(num)
+              @state_changed = true
               @buf = ""
               @pos -= 1
               redo
@@ -288,6 +300,7 @@ module JSON
             else
               @state = :end_value
               notify_value(@buf.to_i)
+              @state_changed = true
               @buf = ""
               @pos -= 1
               redo
@@ -349,6 +362,7 @@ module JSON
             error("Unexpected data") unless ch =~ WS
           end
         end
+        @state_changed
       end
 
       private
@@ -357,12 +371,14 @@ module JSON
         @state = :end_value
         if @stack.pop == type
           send("notify_end_#{type}")
+          @state_changed = true
         else
           error("Expected end of #{type}")
         end
         if @stack.empty?
           @state = :end_document
           notify_end_document
+          @state_changed = true
         end
       end
 
@@ -377,6 +393,7 @@ module JSON
             @state = :end_value
             @buf = ""
             notify_value(value)
+            @state_changed = true
           else
             error("Expected #{word} keyword")
           end
@@ -389,10 +406,12 @@ module JSON
           @state = :start_object
           @stack.push(:object)
           notify_start_object
+          @state_changed = true
         when LEFT_BRACKET
           @state = :start_array
           @stack.push(:array)
           notify_start_array
+          @state_changed = true
         when QUOTE
           @state = :start_string
           @stack.push(:string)

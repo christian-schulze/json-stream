@@ -11,7 +11,9 @@ module JSON
     # http://tools.ietf.org/html/rfc3629#section-3
     class Buffer
       def initialize
-        @state, @buf, @need = :start, [], 0
+        @state = :start
+        @incomplete_buffer, @need = [], 0
+        @complete_buffer = ''
       end
 
       # Fill the buffer with a String of binary UTF-8 encoded bytes. Returns
@@ -27,7 +29,7 @@ module JSON
               bytes << b
             elsif b >= 192
               @state = :multi_byte
-              @buf << b
+              @incomplete_buffer << b
               @need = case
                 when b >= 240 then 4
                 when b >= 224 then 3
@@ -37,9 +39,9 @@ module JSON
             end
           when :multi_byte
             if b > 127 && b < 192
-              @buf << b
-              if @buf.size == @need
-                bytes += @buf.slice!(0, @buf.size)
+              @incomplete_buffer << b
+              if @incomplete_buffer.size == @need
+                bytes += @incomplete_buffer.slice!(0, @incomplete_buffer.size)
                 @state = :start
               end
             else
@@ -47,9 +49,18 @@ module JSON
             end
           end
         end
-        bytes.pack('C*').force_encoding(Encoding::UTF_8).tap do |str|
+        @complete_buffer << bytes.pack('C*').force_encoding(Encoding::UTF_8).tap do |str|
           error('Invalid UTF-8 byte sequence') unless str.valid_encoding?
         end
+        nil
+      end
+
+      def next_character
+        @complete_buffer.slice!(0)
+      end
+
+      def empty?
+        @complete_buffer.size == 0
       end
 
       private
